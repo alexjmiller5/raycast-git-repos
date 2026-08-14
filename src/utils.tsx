@@ -237,32 +237,17 @@ async function findSubmodules(path: string): Promise<string[]> {
   return submodulePaths;
 }
 
-async function findWorktrees(path: string, maxDepth: number): Promise<GitRepo[]> {
-  let foundRepos: GitRepo[] = [];
-  const findCmd = `find -L ${path.replace(/(\s+)/g, "\\$1")} -maxdepth ${maxDepth} -name .git -type f -print || true`;
-  const { stdout, stderr } = await execp(findCmd);
-  const filteredStderr = stderr
-    .split("\n")
-    .filter((line) => !/Permission denied|Operation not permitted/.test(line))
-    .join("\n");
-  if (!filteredStderr) {
-    const repoPaths = stdout.split("\n").filter((e) => e);
-    const repos = parseRepoPaths(path, repoPaths, false);
-    foundRepos = foundRepos.concat(repos);
-    foundRepos.map((repo) => ((repo.icon = "git-worktree-icon.png"), (repo.repoType = GitRepoType.Worktree)));
-  }
-  return foundRepos;
-}
-
 export async function findRepos(paths: string[], maxDepth: number, includeSubmodules: boolean): Promise<GitRepo[]> {
   let foundRepos: GitRepo[] = [];
   await Promise.allSettled(
     paths.map(async (path) => {
+      // ponytail: single find, pruning .git and node_modules so we never descend into
+      // their contents — the old code ran two full unpruned traversals per path (~12x slower)
       const findCmd = `find -L ${path.replace(
         /(\s+)/g,
         "\\$1"
-      )} -maxdepth ${maxDepth} -type d -name .git -print || true`;
-      const { stdout, stderr } = await execp(findCmd);
+      )} -maxdepth ${maxDepth} \\( -type d -name node_modules -prune \\) -o \\( -name .git -print -prune \\) || true`;
+      const { stdout, stderr } = await execp(findCmd, { maxBuffer: 10 * 1024 * 1024 });
       const filteredStderr = stderr
         .split("\n")
         .filter((line) => !/Permission denied|Operation not permitted/.test(line))
@@ -271,7 +256,16 @@ export async function findRepos(paths: string[], maxDepth: number, includeSubmod
         showToast(Toast.Style.Failure, "Find Failed", stderr);
         return [];
       }
-      const repoPaths = stdout.split("\n").filter((e) => e);
+      // A .git directory = normal repo; a .git file = worktree (or submodule checkout)
+      const repoPaths: string[] = [];
+      const worktreePaths: string[] = [];
+      for (const gitPath of stdout.split("\n").filter((e) => e)) {
+        try {
+          (fs.statSync(gitPath).isDirectory() ? repoPaths : worktreePaths).push(gitPath);
+        } catch {
+          // vanished between find and stat; skip
+        }
+      }
       const repos = parseRepoPaths(path, repoPaths, false);
       if (includeSubmodules) {
         let subRepoPaths: string[] = [];
@@ -288,8 +282,8 @@ export async function findRepos(paths: string[], maxDepth: number, includeSubmod
       } else {
         foundRepos = foundRepos.concat(repos);
       }
-      // Search for git worktrees
-      const worktrees = await findWorktrees(path, maxDepth);
+      const worktrees = parseRepoPaths(path, worktreePaths, false);
+      worktrees.forEach((repo) => ((repo.icon = "git-worktree-icon.png"), (repo.repoType = GitRepoType.Worktree)));
       worktrees.forEach(function (worktree) {
         // Only add if a repo.fullPath is not already in array
         const found = foundRepos.findIndex((r) => r.fullPath === worktree.fullPath);
