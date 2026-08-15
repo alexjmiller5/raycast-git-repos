@@ -241,12 +241,13 @@ export async function findRepos(paths: string[], maxDepth: number, includeSubmod
   let foundRepos: GitRepo[] = [];
   await Promise.allSettled(
     paths.map(async (path) => {
-      // ponytail: single find, pruning .git and node_modules so we never descend into
-      // their contents — the old code ran two full unpruned traversals per path (~12x slower)
+      // ponytail: single find, pruning .git plus never-repo dirs (node_modules, Library,
+      // .Trash, Photos bundles) so we never descend into their contents — these dominate a
+      // home-dir scan. Ceiling: a repo nested under a dir literally named Library is skipped.
       const findCmd = `find -L ${path.replace(
         /(\s+)/g,
         "\\$1"
-      )} -maxdepth ${maxDepth} \\( -type d -name node_modules -prune \\) -o \\( -name .git -print -prune \\) || true`;
+      )} -maxdepth ${maxDepth} \\( -type d \\( -name node_modules -o -name Library -o -name .Trash -o -name '*.photoslibrary' \\) -prune \\) -o \\( -name .git -print -prune \\) || true`;
       const { stdout, stderr } = await execp(findCmd, { maxBuffer: 10 * 1024 * 1024 });
       const filteredStderr = stderr
         .split("\n")
@@ -293,6 +294,8 @@ export async function findRepos(paths: string[], maxDepth: number, includeSubmod
       });
     })
   );
+  // ponytail: scan roots can overlap (e.g. ~/ plus dirs inside it) — dedupe by path
+  foundRepos = Array.from(new Map(foundRepos.map((repo) => [repo.fullPath, repo])).values());
   foundRepos.sort((a, b) => {
     const fa = a.name.toLowerCase(),
       fb = b.name.toLowerCase();
