@@ -20,7 +20,10 @@ upstream = copy the newer subdir over, re-apply that delta.
 - `pnpm-workspace.yaml`'s `allowBuilds: esbuild: true` is load-bearing:
   pnpm 10+ blocks dependency postinstall scripts, and without the approval
   `ray develop`'s internal `pnpm install` exits 1.
-- Verify a change builds with `pnpm exec ray build -e dist`.
+- Verify a change builds with `pnpm exec ray build -e dist`. That does NOT
+  refresh what Raycast runs (`-e` is environment, not output path): the live
+  bundle is `~/.config/raycast/extensions/git-repos/`, only rewritten by
+  `pnpm run dev` or `pnpm exec ray build -e dev -o ~/.config/raycast/extensions/git-repos`.
 
 ## Registration reality (why this repo isn't nix-managed)
 
